@@ -3103,24 +3103,28 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     /*
      * Potentially clean the mapping from transient record map. consumedOffset may be -1 when individual chunks are getting
      * produced to drainer queue from kafka callback thread {@link LeaderFollowerStoreIngestionTask#LeaderProducerMessageCallback}
+     *
+     * {@link StoreIngestionTask#purgeTransientRecordBuffer} flag is introduced to help write integration test to exercise code path
+     * during UPDATE message processing in {@link LeaderFollowerStoreIngestionTask#hasProducedToKafka(ConsumerRecord)}. This must be
+     * always set to true except as needed in integration test.
      */
-    // This flag is introduced to help write integration test to exercise code path during UPDATE message processing in
-    // {@link LeaderFollowerStoreIngestionTask#hasProducedToKafka(ConsumerRecord)}. This must be always set to true
-    // except
-    // as needed in integration test.
-    if (purgeTransientRecordBuffer && isTransientRecordBufferUsed() && partitionConsumptionState.isEndOfPushReceived()
-        && leaderProducedRecordContext != null && leaderProducedRecordContext.getConsumedOffset() != -1) {
-      PartitionConsumptionState.TransientRecord transientRecord = partitionConsumptionState.mayRemoveTransientRecord(
-          leaderProducedRecordContext.getConsumedKafkaClusterId(),
-          leaderProducedRecordContext.getConsumedOffset(),
-          kafkaKey.getKey());
-      if (transientRecord != null) {
-        // This is perfectly fine, logging to see how often it happens where we get multiple put/update/delete for same
-        // key in quick succession.
-        String msg = consumerTaskId + ": multiple put,update,delete for same key received from Topic: "
-            + consumerRecord.topic() + " Partition: " + consumedPartition;
-        if (!REDUNDANT_LOGGING_FILTER.isRedundantException(msg)) {
-          LOGGER.info(msg);
+    if (purgeTransientRecordBuffer && isTransientRecordBufferUsed()
+        && partitionConsumptionState.isEndOfPushReceived()) {
+      if (leaderProducedRecordContext != null) {
+        partitionConsumptionState.mayRemoveTransientRecord(
+            leaderProducedRecordContext.getConsumedKafkaClusterId(),
+            leaderProducedRecordContext.getConsumedOffset(),
+            kafkaKey.getKey());
+      } else {
+        int leaderSubPartition = PartitionUtils.getLeaderSubPartition(
+            partitionConsumptionState.getUserPartition(),
+            partitionConsumptionState.getAmplificationFactor());
+        PartitionConsumptionState leaderPartitionConsumptionState = getPartitionConsumptionState(leaderSubPartition);
+        if (leaderPartitionConsumptionState != null) {
+          leaderPartitionConsumptionState.mayRemoveTransientRecord(
+              kafkaValue.getLeaderMetadataFooter().getUpstreamKafkaClusterId(),
+              kafkaValue.getLeaderMetadataFooter().getUpstreamOffset(),
+              kafkaKey.getKey());
         }
       }
     }
